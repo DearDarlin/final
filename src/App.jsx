@@ -8,7 +8,7 @@ const LEGACY_PHOTO_SRC = "https://i.pinimg.com/736x/a7/f5/ce/a7f5ce0ec97d9f391dc
 const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS;
 
 const CONTRACT_ABI = [
-  "function getAllProducts() public view returns (tuple(uint256 id, string name, string description, string imageUrl, uint256 price, address seller, bool isSold)[])",
+  "function getAllProducts() public view returns (tuple(uint256 id, string name, string description, string imageUrl, uint256 price, address seller, address buyer, bool isSold)[])",
   "function purchaseProduct(uint256 _id) public payable"
 ];
 
@@ -91,19 +91,25 @@ function App() {
 
   // Загрузка товаров из блокчейна
   const loadBlockchainData = async () => {
-    if (!contract) return;
+    if (!contract || !account) return;
     try {
       setLoading(true);
       const data = await contract.getAllProducts();
+
       const formattedProducts = data.map(p => ({
         id: p.id.toNumber(),
         name: p.name,
         description: p.description,
         imageUrl: p.imageUrl,
         price: p.price,
+        buyer: p.buyer.toLowerCase(),
         isSold: p.isSold
       }));
+
       setProducts(formattedProducts);
+
+      const myActivePurchases = formattedProducts.filter(p => p.isSold && p.buyer === account.toLowerCase());
+      setMyPurchases(myActivePurchases);
       
       // Дополнительно: фильтруем купленные нами товары, если контракт возвращает адрес покупателя
     } catch (error) {
@@ -114,10 +120,10 @@ function App() {
   };
 
   useEffect(() => {
-    if (contract && !isDemoMode) {
+    if (contract && !isDemoMode && account) {
       loadBlockchainData();
     }
-  }, [contract, isDemoMode]);
+  }, [contract, isDemoMode, account]);
 
   // Функция покупки 
   const buyProduct = async (id, price) => {
