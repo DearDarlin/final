@@ -5,7 +5,7 @@ import './App.css';
 const HERO_PHOTO_SRC = "https://i.pinimg.com/736x/35/35/76/3535768639d8483978753fe301028574.jpg"; 
 const LEGACY_PHOTO_SRC = "https://i.pinimg.com/736x/a7/f5/ce/a7f5ce0ec97d9f391dc439f6f5abbfd8.jpg"; 
 
-const CONTRACT_ADDRESS = ""; 
+const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS;
 
 const CONTRACT_ABI = [
   "function getAllProducts() public view returns (tuple(uint256 id, string name, string description, string imageUrl, uint256 price, address seller, bool isSold)[])",
