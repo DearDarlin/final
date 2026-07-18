@@ -2,15 +2,54 @@ import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import './App.css';
 
-const HERO_PHOTO_SRC = "https://i.pinimg.com/736x/35/35/76/3535768639d8483978753fe301028574.jpg"; 
-const LEGACY_PHOTO_SRC = "https://i.pinimg.com/736x/a7/f5/ce/a7f5ce0ec97d9f391dc439f6f5abbfd8.jpg"; 
+const HERO_PHOTO_SRC = "https://i.pinimg.com/736x/35/35/76/3535768639d8483978753fe301028574.jpg";
+const LEGACY_PHOTO_SRC = "https://i.pinimg.com/736x/a7/f5/ce/a7f5ce0ec97d9f391dc439f6f5abbfd8.jpg";
 
 const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS;
 
 const CONTRACT_ABI = [
-  "function getAllProducts() public view returns (tuple(uint256 id, string name, string description, string imageUrl, uint256 price, address seller, address buyer, bool isSold)[])",
-  "function purchaseProduct(uint256 _id) public payable"
+  "function owner() public view returns (address)",
+  "function getAllProducts() public view returns (tuple(uint256 id, string name, string description, string imageUrl, uint256 price, address seller, address buyer, uint8 status, bytes32 shippingAddressHash)[])",
+  "function createProduct(string _name, string _description, string _imageUrl, uint256 _price) public",
+  "function purchaseProduct(uint256 _id, bytes32 _shippingAddressHash) public payable",
+  "function markAsShipped(uint256 _id) public",
+  "function confirmDelivery(uint256 _id) public",
+  "function cancelOrder(uint256 _id) public"
 ];
+
+// Статусы заказа
+const ORDER_STATUS = {
+  LISTED: 0,
+  PAID: 1,
+  SHIPPED: 2,
+  COMPLETED: 3,
+  CANCELLED: 4
+};
+
+const STATUS_LABELS = {
+  [ORDER_STATUS.LISTED]: { text: "В продаже", className: "status-listed" },
+  [ORDER_STATUS.PAID]: { text: "Оплачено · ждёт отправки", className: "status-paid" },
+  [ORDER_STATUS.SHIPPED]: { text: "Отправлено", className: "status-shipped" },
+  [ORDER_STATUS.COMPLETED]: { text: "Доставлено", className: "status-completed" },
+  [ORDER_STATUS.CANCELLED]: { text: "Отменено", className: "status-cancelled" }
+};
+
+// Адрес доставки в демо-режиме и как заглушка для Web3-режима храним его в localStorage,
+const ADDRESS_STORE_KEY = "mj_shipping_addresses";
+
+function loadShippingAddresses() {
+  try {
+    return JSON.parse(localStorage.getItem(ADDRESS_STORE_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveShippingAddress(productId, address) {
+  const all = loadShippingAddresses();
+  all[productId] = address;
+  localStorage.setItem(ADDRESS_STORE_KEY, JSON.stringify(all));
+}
 
 const DEMO_PRODUCTS = [
   {
@@ -19,23 +58,29 @@ const DEMO_PRODUCTS = [
     description: "The iconic sparkly white glove worn during the Motown 25 performance. Certified authentic.",
     imageUrl: "https://imgs.smoothradio.com/images/141027?width=1920&crop=16_9&signature=Hbk-Y2nksz9lt1GkyUBtP1fHb1A=",
     price: ethers.utils.parseEther("0.05"),
-    isSold: false
+    seller: "0xDemoSeller000000000000000000000000001",
+    buyer: null,
+    status: ORDER_STATUS.LISTED
   },
   {
     id: 2,
     name: "Thriller Vinyl - Original 1982",
     description: "Original gatefold pressing of the best-selling album of all time. Near Mint condition.",
-    imageUrl: "https://preview.redd.it/michael-jackson-thriller-1982-hong-kong-pressing-v0-uz6aki5liqxa1.jpg?width=640&crop=smart&auto=webp&s=1d4177334d86e07332c229534c99ccbf0f2e268e", 
+    imageUrl: "https://preview.redd.it/michael-jackson-thriller-1982-hong-kong-pressing-v0-uz6aki5liqxa1.jpg?width=640&crop=smart&auto=webp&s=1d4177334d86e07332c229534c99ccbf0f2e268e",
     price: ethers.utils.parseEther("0.02"),
-    isSold: false
+    seller: "0xDemoSeller000000000000000000000000001",
+    buyer: null,
+    status: ORDER_STATUS.LISTED
   },
   {
     id: 3,
     name: "Bad World Tour Fedora",
     description: "Black wool fedora hat, custom-made for the 1987-1989 World Tour. Signed by the King of Pop.",
-    imageUrl: "https://www.mjworld.net/wp-content/uploads/billie-jean-bad-tour.jpg", 
+    imageUrl: "https://www.mjworld.net/wp-content/uploads/billie-jean-bad-tour.jpg",
     price: ethers.utils.parseEther("0.1"),
-    isSold: false
+    seller: "0xDemoSeller000000000000000000000000001",
+    buyer: null,
+    status: ORDER_STATUS.LISTED
   }
 ];
 
@@ -52,6 +97,67 @@ function PhotoFrame({ src, alt, className, hint }) {
   );
 }
 
+// Модалка запроса адреса доставки перед покупкой
+function ShippingModal({ product, onConfirm, onCancel }) {
+  const [address, setAddress] = useState("");
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <h3>Адрес доставки</h3>
+        <p className="modal-hint">
+          Укажите, куда отправить «{product.name}». Адрес не публикуется в
+          блокчейне — он виден только продавцу.
+        </p>
+        <textarea
+          className="address-input"
+          rows={3}
+          placeholder="Страна, город, улица, дом, индекс, ФИО получателя"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+        />
+        <div className="modal-actions">
+          <button className="modal-btn ghost" onClick={onCancel}>Отмена</button>
+          <button
+            className="modal-btn"
+            disabled={address.trim().length < 5}
+            onClick={() => onConfirm(address.trim())}
+          >
+            Оплатить и подтвердить
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Форма добавления товара — видна только владельцу контракта
+function AdminProductForm({ onCreate, loading }) {
+  const [form, setForm] = useState({ name: "", description: "", imageUrl: "", price: "" });
+
+  const update = (field) => (e) => setForm({ ...form, [field]: e.target.value });
+
+  const submit = () => {
+    if (!form.name || !form.price) return;
+    onCreate(form);
+    setForm({ name: "", description: "", imageUrl: "", price: "" });
+  };
+
+  return (
+    <div className="admin-form">
+      <div className="admin-form-grid">
+        <input placeholder="Название товара" value={form.name} onChange={update("name")} />
+        <input placeholder="Цена, ETH (например 0.03)" value={form.price} onChange={update("price")} />
+        <input placeholder="Ссылка на изображение" value={form.imageUrl} onChange={update("imageUrl")} className="admin-form-full" />
+        <textarea placeholder="Описание" value={form.description} onChange={update("description")} className="admin-form-full" rows={2} />
+      </div>
+      <button className="hero-cta" disabled={loading} onClick={submit}>
+        {loading ? "Добавление..." : "Добавить товар"}
+      </button>
+    </div>
+  );
+}
+
 function App() {
   const [currentPage, setCurrentPage] = useState("home");
 
@@ -60,8 +166,12 @@ function App() {
   const [products, setProducts] = useState(DEMO_PRODUCTS);
   const [loading, setLoading] = useState(false);
   const [contract, setContract] = useState(null);
+  const [ownerAddress, setOwnerAddress] = useState("0xDemoSeller000000000000000000000000001");
 
-  const [myPurchases, setMyPurchases] = useState([]);
+  const [pendingPurchase, setPendingPurchase] = useState(null); // товар, ожидающий адреса доставки
+  const [shippingAddresses, setShippingAddresses] = useState(loadShippingAddresses());
+
+  const isOwner = account && ownerAddress && account.toLowerCase() === ownerAddress.toLowerCase();
 
   // Подключение кошелька MetaMask
   const connectWallet = async () => {
@@ -76,7 +186,10 @@ function App() {
         const signer = provider.getSigner();
         const marketplaceContract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
         setContract(marketplaceContract);
-        
+
+        const chainOwner = await marketplaceContract.owner();
+        setOwnerAddress(chainOwner);
+
         alert("Успешно подключено к MetaMask! Переходим в Web3 режим.");
       } catch (error) {
         console.error("Ошибка подключения к MetaMask:", error);
@@ -91,7 +204,7 @@ function App() {
 
   // Загрузка товаров из блокчейна
   const loadBlockchainData = async () => {
-    if (!contract || !account) return;
+    if (!contract) return;
     try {
       setLoading(true);
       const data = await contract.getAllProducts();
@@ -102,16 +215,12 @@ function App() {
         description: p.description,
         imageUrl: p.imageUrl,
         price: p.price,
-        buyer: p.buyer.toLowerCase(),
-        isSold: p.isSold
+        seller: p.seller,
+        buyer: p.buyer,
+        status: p.status
       }));
 
       setProducts(formattedProducts);
-
-      const myActivePurchases = formattedProducts.filter(p => p.isSold && p.buyer === account.toLowerCase());
-      setMyPurchases(myActivePurchases);
-      
-      // Дополнительно: фильтруем купленные нами товары, если контракт возвращает адрес покупателя
     } catch (error) {
       console.error("Ошибка загрузки данных из блокчейна:", error);
     } finally {
@@ -120,42 +229,52 @@ function App() {
   };
 
   useEffect(() => {
-    if (contract && !isDemoMode && account) {
+    if (contract && !isDemoMode) {
       loadBlockchainData();
     }
-  }, [contract, isDemoMode, account]);
+  }, [contract, isDemoMode]);
 
-  // Функция покупки 
-  const buyProduct = async (id, price) => {
-    const targetProduct = products.find(p => p.id === id);
+  // Покупатель нажал "Купить" — сперва спрашиваем адрес доставки
+  const startPurchase = (product) => {
+    if (isOwner) {
+      alert("Продавец не может купить собственный товар.");
+      return;
+    }
+    setPendingPurchase(product);
+  };
+
+  // Покупка после подтверждения адреса
+  const confirmPurchase = async (address) => {
+    const product = pendingPurchase;
+    setPendingPurchase(null);
+    if (!product) return;
 
     if (isDemoMode) {
       setLoading(true);
       setTimeout(() => {
-        setProducts(prevProducts => 
-          prevProducts.map(p => p.id === id ? { ...p, isSold: true } : p)
+        setProducts(prev =>
+          prev.map(p => p.id === product.id
+            ? { ...p, status: ORDER_STATUS.PAID, buyer: account || "demo-buyer" }
+            : p)
         );
-        // Добавляем купленный товар в историю покупок
-        if (targetProduct) {
-          setMyPurchases(prev => [...prev, { ...targetProduct, isSold: true }]);
-        }
+        saveShippingAddress(product.id, address);
+        setShippingAddresses(loadShippingAddresses());
         setLoading(false);
-        alert("[ДЕМО-РЕЖИМ]: Товар успешно куплен! Сделка сохранена во вкладке 'Мои покупки'.");
+        alert("[ДЕМО-РЕЖИМ]: Оплата прошла. Деньги в эскроу до подтверждения доставки. Смотрите статус во вкладке 'Мои покупки'.");
       }, 800);
     } else {
       if (!contract) return;
       try {
         setLoading(true);
-        const tx = await contract.purchaseProduct(id, { value: price });
-        await tx.wait(); 
-        
-        // Добавляем в историю
-        if (targetProduct) {
-          setMyPurchases(prev => [...prev, { ...targetProduct, isSold: true }]);
-        }
+        const addressHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(address));
+        const tx = await contract.purchaseProduct(product.id, addressHash, { value: product.price });
+        await tx.wait();
 
-        alert("[WEB3-РЕЖИМ]: Транзакция подтверждена! Вы купили мерч в блокчейне!");
-        loadBlockchainData(); 
+        saveShippingAddress(product.id, address);
+        setShippingAddresses(loadShippingAddresses());
+
+        alert("[WEB3-РЕЖИМ]: Оплата подтверждена в блокчейне! Деньги в эскроу до подтверждения доставки.");
+        loadBlockchainData();
       } catch (error) {
         console.error("Ошибка при покупке в Web3:", error);
         alert("Ошибка транзакции или пользователь отклонил платеж.");
@@ -165,6 +284,136 @@ function App() {
     }
   };
 
+  // Продавец отмечает отправку
+  const markAsShipped = async (product) => {
+    if (isDemoMode) {
+      setLoading(true);
+      setTimeout(() => {
+        setProducts(prev => prev.map(p => p.id === product.id ? { ...p, status: ORDER_STATUS.SHIPPED } : p));
+        setLoading(false);
+      }, 500);
+    } else {
+      if (!contract) return;
+      try {
+        setLoading(true);
+        const tx = await contract.markAsShipped(product.id);
+        await tx.wait();
+        alert("Посылка отмечена как отправленная.");
+        loadBlockchainData();
+      } catch (error) {
+        console.error("Ошибка markAsShipped:", error);
+        alert("Не удалось обновить статус отправки.");
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  // Покупатель подтверждает получение — деньги уходят продавцу
+  const confirmDelivery = async (product) => {
+    if (isDemoMode) {
+      setLoading(true);
+      setTimeout(() => {
+        setProducts(prev => prev.map(p => p.id === product.id ? { ...p, status: ORDER_STATUS.COMPLETED } : p));
+        setLoading(false);
+        alert("[ДЕМО-РЕЖИМ]: Получение подтверждено, деньги переведены продавцу.");
+      }, 500);
+    } else {
+      if (!contract) return;
+      try {
+        setLoading(true);
+        const tx = await contract.confirmDelivery(product.id);
+        await tx.wait();
+        alert("Получение подтверждено! Средства переведены продавцу.");
+        loadBlockchainData();
+      } catch (error) {
+        console.error("Ошибка confirmDelivery:", error);
+        alert("Не удалось подтвердить получение.");
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  // Покупатель отменяет заказ (пока не отправлен)
+  const cancelOrder = async (product) => {
+    if (!window.confirm("Отменить заказ и вернуть деньги?")) return;
+
+    if (isDemoMode) {
+      setLoading(true);
+      setTimeout(() => {
+        setProducts(prev => prev.map(p => p.id === product.id
+          ? { ...p, status: ORDER_STATUS.LISTED, buyer: null }
+          : p));
+        setLoading(false);
+        alert("[ДЕМО-РЕЖИМ]: Заказ отменён, средства возвращены.");
+      }, 500);
+    } else {
+      if (!contract) return;
+      try {
+        setLoading(true);
+        const tx = await contract.cancelOrder(product.id);
+        await tx.wait();
+        alert("Заказ отменён, средства возвращены на ваш кошелёк.");
+        loadBlockchainData();
+      } catch (error) {
+        console.error("Ошибка cancelOrder:", error);
+        alert("Не удалось отменить заказ (возможно, он уже отправлен).");
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  // Владелец добавляет новый товар
+  const createProduct = async (form) => {
+    if (isDemoMode) {
+      setLoading(true);
+      setTimeout(() => {
+        setProducts(prev => [
+          ...prev,
+          {
+            id: prev.length ? Math.max(...prev.map(p => p.id)) + 1 : 1,
+            name: form.name,
+            description: form.description,
+            imageUrl: form.imageUrl,
+            price: ethers.utils.parseEther(form.price || "0"),
+            seller: ownerAddress,
+            buyer: null,
+            status: ORDER_STATUS.LISTED
+          }
+        ]);
+        setLoading(false);
+      }, 500);
+    } else {
+      if (!contract) return;
+      try {
+        setLoading(true);
+        const priceWei = ethers.utils.parseEther(form.price);
+        const tx = await contract.createProduct(form.name, form.description, form.imageUrl, priceWei);
+        await tx.wait();
+        alert("Товар добавлен в каталог!");
+        loadBlockchainData();
+      } catch (error) {
+        console.error("Ошибка createProduct:", error);
+        alert("Не удалось добавить товар (только владелец контракта может это делать).");
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const myPurchases = products.filter(p =>
+    account && p.buyer && p.buyer.toLowerCase?.() === account.toLowerCase() && p.status !== ORDER_STATUS.LISTED
+  ).concat(
+    isDemoMode ? products.filter(p => p.buyer === "demo-buyer" && p.status !== ORDER_STATUS.LISTED) : []
+  );
+
+  const renderStatusBadge = (status) => {
+    const label = STATUS_LABELS[status] || STATUS_LABELS[ORDER_STATUS.LISTED];
+    return <span className={`status-badge ${label.className}`}>{label.text}</span>;
+  };
+
   return (
     <div className="app-container">
       <header className="header">
@@ -172,7 +421,7 @@ function App() {
           <span className="logo">MJ Souvenirs</span>
           <span className="logo-sub">King of Pop Shop</span>
         </div>
-        
+
         <nav className="nav-menu">
           <button className={`nav-link ${currentPage === 'home' ? 'active' : ''}`} onClick={() => setCurrentPage("home")}>
             Главная
@@ -183,6 +432,11 @@ function App() {
           <button className={`nav-link ${currentPage === 'my-purchases' ? 'active' : ''}`} onClick={() => setCurrentPage("my-purchases")}>
             Мои покупки ({myPurchases.length})
           </button>
+          {isOwner && (
+            <button className={`nav-link ${currentPage === 'admin' ? 'active' : ''}`} onClick={() => setCurrentPage("admin")}>
+              Управление заказами
+            </button>
+          )}
         </nav>
 
         <div className="auth-section">
@@ -207,7 +461,8 @@ function App() {
             <h1 className="hero-title">MJ<br />SOUVENIRS</h1>
             <p className="hero-subtitle">
               Подтверждённые вещи Короля Поп-музыки. Каждый предмет — с историей
-              и подлинностью, закреплённой в блокчейне.
+              и подлинностью, закреплённой в блокчейне. Деньги хранятся в эскроу
+              до подтверждения доставки.
             </p>
             <button
               className="hero-cta"
@@ -217,18 +472,14 @@ function App() {
             </button>
           </div>
           <div className="hero-photo-frame">
-            <PhotoFrame
-              src={HERO_PHOTO_SRC}
-              alt="Michael Jackson"
-              className="hero-photo"
-            />
+            <PhotoFrame src={HERO_PHOTO_SRC} alt="Michael Jackson" className="hero-photo" />
           </div>
         </section>
       )}
 
       <main className="main-content">
         <div className="mode-banner">
-          Текущий режим работы сайта: 
+          Текущий режим работы сайта:
           <strong className={isDemoMode ? "demo-text" : "web3-text"}>
             {isDemoMode ? " Демо-режим (Без кошелька)" : " Web3-режим (Блокчейн активен)"}
           </strong>
@@ -243,7 +494,7 @@ function App() {
               <div className="section-rule"></div>
             </div>
             <div className="product-grid">
-              {products.map((product) => (
+              {products.filter(p => p.status === ORDER_STATUS.LISTED).map((product) => (
                 <div key={product.id} className="product-card">
                   <div className="image-wrapper">
                     <img src={product.imageUrl} alt={product.name} className="product-image" />
@@ -251,22 +502,15 @@ function App() {
                   <div className="product-info">
                     <h3 className="product-title">{product.name}</h3>
                     <p className="product-description">{product.description}</p>
-                    
+
                     <div className="purchase-section">
                       <div className="price-container">
                         <span className="price-label">Цена:</span>
-                        <span className="price-val">
-                          {ethers.utils.formatEther(product.price)} ETH
-                        </span>
+                        <span className="price-val">{ethers.utils.formatEther(product.price)} ETH</span>
                       </div>
-                      
-                      {product.isSold ? (
-                        <button className="buy-btn sold" disabled>Продано</button>
-                      ) : (
-                        <button className="buy-btn" onClick={() => buyProduct(product.id, product.price)}>
-                          Купить
-                        </button>
-                      )}
+                      <button className="buy-btn" onClick={() => startPurchase(product)}>
+                        Купить
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -301,6 +545,7 @@ function App() {
             <div className="profile-details">
               <p><strong>Статус кошелька:</strong> {account ? "Подключен" : "Отключен"}</p>
               <p><strong>Ваш адрес:</strong> <span className="address-block">{account || "Адрес отсутствует (демо-режим)"}</span></p>
+              <p><strong>Роль:</strong> {isOwner ? "Владелец магазина" : "Покупатель"}</p>
               <p><strong>Сеть взаимодействия:</strong> {isDemoMode ? "Локальный браузерный стейт" : "Injected Web3 Provider (MetaMask)"}</p>
               <p><strong>Всего куплено товаров на сайте:</strong> {myPurchases.length} шт.</p>
             </div>
@@ -317,18 +562,34 @@ function App() {
               <p className="empty-message">Вы пока не приобрели ни одного сувенира. Самое время зайти на Главную!</p>
             ) : (
               <div className="product-grid">
-                {myPurchases.map((product, index) => (
-                  <div key={index} className="product-card purchase-card">
+                {myPurchases.map((product) => (
+                  <div key={product.id} className="product-card purchase-card">
                     <div className="image-wrapper">
                       <img src={product.imageUrl} alt={product.name} className="product-image" />
                     </div>
                     <div className="product-info">
                       <h3 className="product-title">{product.name}</h3>
-                      <div className="badge-bought">В вашей коллекции</div>
+                      {renderStatusBadge(product.status)}
                       <p className="product-description" style={{ marginTop: '8px' }}>{product.description}</p>
+                      <p className="shipping-address-note">
+                        Адрес доставки: {shippingAddresses[product.id] || "не указан"}
+                      </p>
                       <div className="price-container">
                         <span className="price-label">Заплачено:</span>
                         <span className="price-val">{ethers.utils.formatEther(product.price)} ETH</span>
+                      </div>
+
+                      <div className="order-actions">
+                        {product.status === ORDER_STATUS.PAID && (
+                          <button className="modal-btn ghost small" onClick={() => cancelOrder(product)}>
+                            Отменить заказ
+                          </button>
+                        )}
+                        {product.status === ORDER_STATUS.SHIPPED && (
+                          <button className="modal-btn small" onClick={() => confirmDelivery(product)}>
+                            Подтвердить получение
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -337,7 +598,59 @@ function App() {
             )}
           </div>
         )}
+
+        {currentPage === "admin" && isOwner && (
+          <div>
+            <div className="section-heading">
+              <h2>Управление заказами</h2>
+              <div className="section-rule"></div>
+            </div>
+
+            <div className="section-heading" style={{ marginTop: 0 }}>
+              <h3 style={{ fontFamily: 'var(--font-body)', fontSize: 16, color: 'var(--ink-muted)', margin: 0 }}>
+                Добавить новый товар
+              </h3>
+            </div>
+            <AdminProductForm onCreate={createProduct} loading={loading} />
+
+            <div className="section-heading" style={{ marginTop: 40 }}>
+              <h3 style={{ fontFamily: 'var(--font-body)', fontSize: 16, color: 'var(--ink-muted)', margin: 0 }}>
+                Заказы, ожидающие отправки
+              </h3>
+            </div>
+            <div className="product-grid">
+              {products.filter(p => p.status === ORDER_STATUS.PAID).map(product => (
+                <div key={product.id} className="product-card purchase-card">
+                  <div className="image-wrapper">
+                    <img src={product.imageUrl} alt={product.name} className="product-image" />
+                  </div>
+                  <div className="product-info">
+                    <h3 className="product-title">{product.name}</h3>
+                    {renderStatusBadge(product.status)}
+                    <p className="shipping-address-note">
+                      Куда отправлять: {shippingAddresses[product.id] || "не указан"}
+                    </p>
+                    <button className="modal-btn small" onClick={() => markAsShipped(product)}>
+                      Отметить как отправлено
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {products.filter(p => p.status === ORDER_STATUS.PAID).length === 0 && (
+                <p className="empty-message">Нет заказов, ожидающих отправки.</p>
+              )}
+            </div>
+          </div>
+        )}
       </main>
+
+      {pendingPurchase && (
+        <ShippingModal
+          product={pendingPurchase}
+          onConfirm={confirmPurchase}
+          onCancel={() => setPendingPurchase(null)}
+        />
+      )}
 
       <footer className="footer">
         © {new Date().getFullYear()} MJ Souvenirs — коллекция подлинных вещей, подтверждённая в блокчейне.
