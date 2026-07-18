@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ethers } from 'ethers';
 import './App.css';
 
 const HERO_PHOTO_SRC = "https://i.pinimg.com/736x/35/35/76/3535768639d8483978753fe301028574.jpg";
 const LEGACY_PHOTO_SRC = "https://i.pinimg.com/736x/a7/f5/ce/a7f5ce0ec97d9f391dc439f6f5abbfd8.jpg";
+
+const HEE_HEE_SRC = "/sounds/hee-hee.mp3";
 
 const CONTRACT_ADDRESS = import.meta.env.VITE_CONTRACT_ADDRESS;
 
@@ -158,6 +160,21 @@ function AdminProductForm({ onCreate, loading }) {
   );
 }
 
+// Стек уведомлений вместо системного alert() 
+function ToastStack({ toasts, onDismiss }) {
+  if (toasts.length === 0) return null;
+  return (
+    <div className="toast-stack">
+      {toasts.map((t) => (
+        <div key={t.id} className={`toast toast-${t.type}`} onClick={() => onDismiss(t.id)}>
+          <span className="toast-icon">{t.type === "error" ? "✕" : "✦"}</span>
+          <span className="toast-text">{t.message}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function App() {
   const [currentPage, setCurrentPage] = useState("home");
 
@@ -173,8 +190,36 @@ function App() {
 
   const isOwner = account && ownerAddress && account.toLowerCase() === ownerAddress.toLowerCase();
 
+  // ===== Звук "hee hee" =====
+  const heeHeeRef = useRef(null);
+  const playHeeHee = useCallback((volume = 0.5) => {
+    try {
+      if (!heeHeeRef.current) {
+        heeHeeRef.current = new Audio(HEE_HEE_SRC);
+      }
+      heeHeeRef.current.volume = volume;
+      heeHeeRef.current.currentTime = 0;
+      // play() возвращает Promise — если браузер заблокирует автозапуск
+      heeHeeRef.current.play().catch(() => {});
+    } catch (e) {
+    }
+  }, []);
+
+  // ===== Тосты вместо alert() =====
+  const [toasts, setToasts] = useState([]);
+  const dismissToast = useCallback((id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+  const showToast = useCallback((message, type = "info") => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, message, type }]);
+    playHeeHee(0.55);
+    setTimeout(() => dismissToast(id), 4500);
+  }, [playHeeHee, dismissToast]);
+
   // Подключение кошелька MetaMask
   const connectWallet = async () => {
+    playHeeHee(0.35);
     if (window.ethereum) {
       try {
         setLoading(true);
@@ -190,15 +235,15 @@ function App() {
         const chainOwner = await marketplaceContract.owner();
         setOwnerAddress(chainOwner);
 
-        alert("Успешно подключено к MetaMask! Переходим в Web3 режим.");
+        showToast("Успешно подключено к MetaMask! Переходим в Web3 режим.", "success");
       } catch (error) {
         console.error("Ошибка подключения к MetaMask:", error);
-        alert("Не удалось подключить кошелек. Остаемся в демо-режиме.");
+        showToast("Не удалось подключить кошелек. Остаемся в демо-режиме.", "error");
       } finally {
         setLoading(false);
       }
     } else {
-      alert("MetaMask не найден. Вы можете пользоваться сайтом в демо-режиме!");
+      showToast("MetaMask не найден. Вы можете пользоваться сайтом в демо-режиме!", "info");
     }
   };
 
@@ -236,8 +281,9 @@ function App() {
 
   // Покупатель нажал "Купить" — сперва спрашиваем адрес доставки
   const startPurchase = (product) => {
+    playHeeHee(0.4);
     if (isOwner) {
-      alert("Продавец не может купить собственный товар.");
+      showToast("Продавец не может купить собственный товар.", "error");
       return;
     }
     setPendingPurchase(product);
@@ -245,6 +291,7 @@ function App() {
 
   // Покупка после подтверждения адреса
   const confirmPurchase = async (address) => {
+    playHeeHee(0.4);
     const product = pendingPurchase;
     setPendingPurchase(null);
     if (!product) return;
@@ -260,7 +307,7 @@ function App() {
         saveShippingAddress(product.id, address);
         setShippingAddresses(loadShippingAddresses());
         setLoading(false);
-        alert("[ДЕМО-РЕЖИМ]: Оплата прошла. Деньги в эскроу до подтверждения доставки. Смотрите статус во вкладке 'Мои покупки'.");
+        showToast("[ДЕМО-РЕЖИМ]: Оплата прошла. Деньги в эскроу до подтверждения доставки.", "success");
       }, 800);
     } else {
       if (!contract) return;
@@ -273,11 +320,11 @@ function App() {
         saveShippingAddress(product.id, address);
         setShippingAddresses(loadShippingAddresses());
 
-        alert("[WEB3-РЕЖИМ]: Оплата подтверждена в блокчейне! Деньги в эскроу до подтверждения доставки.");
+        showToast("[WEB3-РЕЖИМ]: Оплата подтверждена в блокчейне! Деньги в эскроу.", "success");
         loadBlockchainData();
       } catch (error) {
         console.error("Ошибка при покупке в Web3:", error);
-        alert("Ошибка транзакции или пользователь отклонил платеж.");
+        showToast("Ошибка транзакции или пользователь отклонил платеж.", "error");
       } finally {
         setLoading(false);
       }
@@ -286,6 +333,7 @@ function App() {
 
   // Продавец отмечает отправку
   const markAsShipped = async (product) => {
+    playHeeHee(0.4);
     if (isDemoMode) {
       setLoading(true);
       setTimeout(() => {
@@ -298,11 +346,11 @@ function App() {
         setLoading(true);
         const tx = await contract.markAsShipped(product.id);
         await tx.wait();
-        alert("Посылка отмечена как отправленная.");
+        showToast("Посылка отмечена как отправленная.", "success");
         loadBlockchainData();
       } catch (error) {
         console.error("Ошибка markAsShipped:", error);
-        alert("Не удалось обновить статус отправки.");
+        showToast("Не удалось обновить статус отправки.", "error");
       } finally {
         setLoading(false);
       }
@@ -311,12 +359,13 @@ function App() {
 
   // Покупатель подтверждает получение — деньги уходят продавцу
   const confirmDelivery = async (product) => {
+    playHeeHee(0.4);
     if (isDemoMode) {
       setLoading(true);
       setTimeout(() => {
         setProducts(prev => prev.map(p => p.id === product.id ? { ...p, status: ORDER_STATUS.COMPLETED } : p));
         setLoading(false);
-        alert("[ДЕМО-РЕЖИМ]: Получение подтверждено, деньги переведены продавцу.");
+        showToast("[ДЕМО-РЕЖИМ]: Получение подтверждено, деньги переведены продавцу.", "success");
       }, 500);
     } else {
       if (!contract) return;
@@ -324,11 +373,11 @@ function App() {
         setLoading(true);
         const tx = await contract.confirmDelivery(product.id);
         await tx.wait();
-        alert("Получение подтверждено! Средства переведены продавцу.");
+        showToast("Получение подтверждено! Средства переведены продавцу.", "success");
         loadBlockchainData();
       } catch (error) {
         console.error("Ошибка confirmDelivery:", error);
-        alert("Не удалось подтвердить получение.");
+        showToast("Не удалось подтвердить получение.", "error");
       } finally {
         setLoading(false);
       }
@@ -338,6 +387,7 @@ function App() {
   // Покупатель отменяет заказ (пока не отправлен)
   const cancelOrder = async (product) => {
     if (!window.confirm("Отменить заказ и вернуть деньги?")) return;
+    playHeeHee(0.4);
 
     if (isDemoMode) {
       setLoading(true);
@@ -346,7 +396,7 @@ function App() {
           ? { ...p, status: ORDER_STATUS.LISTED, buyer: null }
           : p));
         setLoading(false);
-        alert("[ДЕМО-РЕЖИМ]: Заказ отменён, средства возвращены.");
+        showToast("[ДЕМО-РЕЖИМ]: Заказ отменён, средства возвращены.", "info");
       }, 500);
     } else {
       if (!contract) return;
@@ -354,11 +404,11 @@ function App() {
         setLoading(true);
         const tx = await contract.cancelOrder(product.id);
         await tx.wait();
-        alert("Заказ отменён, средства возвращены на ваш кошелёк.");
+        showToast("Заказ отменён, средства возвращены на ваш кошелёк.", "info");
         loadBlockchainData();
       } catch (error) {
         console.error("Ошибка cancelOrder:", error);
-        alert("Не удалось отменить заказ (возможно, он уже отправлен).");
+        showToast("Не удалось отменить заказ (возможно, он уже отправлен).", "error");
       } finally {
         setLoading(false);
       }
@@ -367,6 +417,7 @@ function App() {
 
   // Владелец добавляет новый товар
   const createProduct = async (form) => {
+    playHeeHee(0.4);
     if (isDemoMode) {
       setLoading(true);
       setTimeout(() => {
@@ -392,11 +443,11 @@ function App() {
         const priceWei = ethers.utils.parseEther(form.price);
         const tx = await contract.createProduct(form.name, form.description, form.imageUrl, priceWei);
         await tx.wait();
-        alert("Товар добавлен в каталог!");
+        showToast("Товар добавлен в каталог!", "success");
         loadBlockchainData();
       } catch (error) {
         console.error("Ошибка createProduct:", error);
-        alert("Не удалось добавить товар (только владелец контракта может это делать).");
+        showToast("Не удалось добавить товар (только владелец контракта может это делать).", "error");
       } finally {
         setLoading(false);
       }
@@ -651,6 +702,8 @@ function App() {
           onCancel={() => setPendingPurchase(null)}
         />
       )}
+
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
 
       <footer className="footer">
         © {new Date().getFullYear()} MJ Souvenirs — коллекция подлинных вещей, подтверждённая в блокчейне.
