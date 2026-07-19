@@ -508,7 +508,7 @@ function App() {
         <section className="hero">
           <div className="hero-beam"></div>
           <div className="hero-content">
-            <span className="hero-eyebrow">Официальная коллекция · сертификат в блокчейне</span>
+            <span className="hero-eyebrow">Официальная коллекция</span>
             <h1 className="hero-title">MJ<br />SOUVENIRS</h1>
             <p className="hero-subtitle">
               Подтверждённые вещи Короля Поп-музыки. Каждый предмет — с историей
