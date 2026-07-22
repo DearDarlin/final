@@ -377,7 +377,7 @@ function App() {
         loadBlockchainData();
       } catch (error) {
         console.error("Ошибка confirmDelivery:", error);
-        showToast("Не удалось подтвердить получение.", "error");
+        showToast("Не удалось подтвердить получение!", "error");
       } finally {
         setLoading(false);
       }
